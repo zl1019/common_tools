@@ -1,6 +1,8 @@
-# OpenDay WeCom Async SDK
+# WeCom Async SDK
 
-基于 `WxWorkAPI` 文档封装的异步 Python SDK，首批按业务模块覆盖预约会议、OA 会议室、智能表格、收集表、通讯录和应用消息。
+基于 `WxWorkAPI` 文档封装的异步企业微信 API SDK，首批按 API 模块覆盖预约会议、OA 会议室、智能表格、收集表、通讯录和应用消息。本项目是 `common_tools` monorepo 中可独立安装和发布的 Python 包。
+
+本 SDK 只封装企业微信 API，不实现 OpenDay 业务流程、待办主数据、平台切换逻辑或 OpenDay Agent。业务系统应在 SDK 外定义自己的平台无关接口，并通过企微连接器调用本包；未来接入飞书时，可新增独立飞书 SDK/连接器，不让业务层依赖 `wecom_sdk` 类型。
 
 ## 安装
 
@@ -15,6 +17,14 @@ pip install wecom-sdk-python
 ```bash
 pip install -e .
 ```
+
+从 GitHub 安装此仓库中的独立子包，可在应用的 `requirements.txt` 中写：
+
+```text
+wecom-sdk-python @ git+https://github.com/zl1019/common_tools.git@v0.1.0#subdirectory=wecom-sdk-python
+```
+
+将 `v0.1.0` 替换为实际存在的 tag 或 commit SHA。也可改用 `@main` 跟踪主分支；生产依赖建议固定版本引用。私有仓库需要预先配置 GitHub 认证。
 
 依赖 `httpx`。要求 Python 3.10 或更高版本。
 

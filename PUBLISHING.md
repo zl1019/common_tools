@@ -4,10 +4,10 @@
 
 ## 发布单个包
 
-例如发布 `wecom-sdk-python`：
+例如发布 `wecom-sdk-python`。从 `common_tools` 仓库根目录执行：
 
 ```powershell
-Set-Location common_tools/wecom-sdk-python
+Set-Location wecom-sdk-python
 python -m pip install -e ".[publish]"
 python -m build
 python -m twine check dist/*
@@ -44,7 +44,7 @@ python -m twine upload dist/*
 消费者的 `requirements.txt` 按包目录指定：
 
 ```text
-发行名 @ git+https://github.com/szvayi/OpenDay.git@版本标签或提交SHA#subdirectory=common_tools/包项目目录
+发行名 @ git+https://github.com/zl1019/common_tools.git@版本标签或提交SHA#subdirectory=包项目目录
 ```
 
 发布到 PyPI 后，消费者也可以直接按发行名和版本安装，不必依赖 GitHub 子目录。
