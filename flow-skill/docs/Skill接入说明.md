@@ -460,6 +460,36 @@ Human Task的 `mode="approval"` 使用：
 每次 `submit-task-result` 被接受后，Agent必须再次调用 `get-next-task`，直到返回
 `waiting`、`waiting_user`、`completed` 或 `failed`。
 
+### 8.7 Agent退出门禁
+
+Agent不得在完成一个Task后直接结束。结束当前执行轮次前，必须完成以下检查：
+
+1. 如果最近一次返回为 `task_ready`，必须执行该Task并成功调用 `submit-task-result`；
+2. 提交结果后，必须再次调用 `get-next-task`；
+3. 只有以下状态允许退出当前轮次：
+   - `completed`：Run已完成，可以正常结束；
+   - `waiting_user`：需要用户输入、审批或重试决定，可以暂停，但必须保留 `run_id`；
+   - `waiting`：明确等待外部条件时可以暂停，并保留 `run_id`；
+4. `task_ready` 状态禁止退出；
+5. 不能根据文件已生成、推理已完成或Task数量已执行完自行判断Run结束；
+6. 如果Task结果尚未得到 `submit-task-result` 的成功响应，禁止退出。
+
+推荐的退出判断：
+
+```python
+response = get_next_task(run_id)
+
+if response.status == "task_ready":
+    # 必须继续执行，不能退出
+    execute_and_submit(response.task)
+elif response.status in {"completed", "waiting_user", "waiting"}:
+    # 可以结束当前执行轮次；waiting_user/waiting必须保留run_id
+    stop_current_round()
+else:
+    # 未知状态不得静默退出，应报告协议错误
+    report_protocol_error(response)
+```
+
 ## 9. 返回给Agent的Task数据
 
 `task_ready` 返回内容包含：
