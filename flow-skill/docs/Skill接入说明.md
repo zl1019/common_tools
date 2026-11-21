@@ -490,6 +490,33 @@ else:
     report_protocol_error(response)
 ```
 
+### 8.8 已运行Task的信息
+
+当 `get_next_task` 返回：
+
+```json
+{
+  "status": "waiting",
+  "reason": "task_already_running"
+}
+```
+
+返回的 `task` 会包含：
+
+```json
+{
+  "task_id": "collect",
+  "task_name": "数据收集",
+  "started_at": "2026-11-21T10:00:00+00:00",
+  "elapsed_seconds": 1250,
+  "stale_after_seconds": 1800,
+  "retry_count": 0
+}
+```
+
+其中 `elapsed_seconds` 是本次调用时计算的已运行秒数，不是后台实时计时。若超过
+`stale_after_seconds`，后续调用会转为 `waiting_user`，询问是否重新执行整个Task。
+
 ## 9. 返回给Agent的Task数据
 
 `task_ready` 返回内容包含：

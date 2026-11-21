@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import sqlite3
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -279,13 +280,37 @@ class Scheduler:
                     status=ResponseStatus.WAITING,
                     run_id=run["run_id"],
                     reason="task_already_running",
-                    task={"task_id": task["task_id"], "started_at": task["started_at"]},
+                    task=self._running_task_payload(task, definition),
                 )
             if task["status"] == TaskStatus.WAITING_RETRY_CONFIRMATION:
                 return self._retry_confirmation_response(run, task)
             if task["status"] == TaskStatus.WAITING_INPUT:
                 return self._human_response(run, task, definition)
         return None
+
+    @staticmethod
+    def _running_task_payload(
+        task: Mapping[str, Any],
+        definition: TaskDefinition,
+    ) -> dict[str, Any]:
+        started_at = task.get("started_at")
+        elapsed_seconds = None
+        if started_at:
+            started = datetime.fromisoformat(str(started_at))
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
+            elapsed_seconds = max(
+                0,
+                int((datetime.now(timezone.utc) - started).total_seconds()),
+            )
+        return {
+            "task_id": task["task_id"],
+            "task_name": definition.metadata.get("name", task["task_id"]),
+            "started_at": started_at,
+            "elapsed_seconds": elapsed_seconds,
+            "stale_after_seconds": task.get("stale_after_seconds"),
+            "retry_count": task.get("retry_count", 0),
+        }
 
     def _submit_running_task(
         self,
