@@ -1,0 +1,156 @@
+---
+name: <skill-name>
+description: <说明该业务Skill处理什么任务，以及何时使用。>
+---
+
+# <Skill显示名称>
+
+本Skill使用 Flow-Skill 管理多步骤业务流程。Agent 必须通过
+`workflow.py` 获取和提交Task，不得跳过当前Task直接执行后续步骤。
+
+## 适用范围
+
+<说明本Skill适用的业务请求。>
+
+## 不适用范围
+
+<说明哪些请求不应使用本Skill。>
+
+## 业务约束
+
+- <业务约束1>
+- <业务约束2>
+- 不启动项目。
+- 不编写单元测试，除非用户明确提出其他要求。
+
+## 完成任务检查门禁
+
+每个有业务产出的Agent Task必须在 `workflow.py` 配置 `validator`。
+Agent提交结果后，只有validator通过，Task才算完成并允许进入下一步。
+
+门禁至少检查：
+
+- 结果结构和必填字段；
+- 声明的文件确实存在；
+- 文件位于当前Run Workspace内；
+- 记录数量和业务汇总值正确；
+- 产物满足后续Task的输入要求。
+
+门禁失败时不得推进流程。Agent应根据返回的错误修正当前Task并重新提交，
+不得通过自行提交 `completed` 绕过检查。
+
+如果本Skill有最终报告、汇总或发布产物，还必须在 `Flow(...)` 配置Run完成门禁
+`completion_gate`。所有Task完成或跳过后，只有该门禁通过，Run才会进入 `completed`。
+
+## Flow运行数据
+
+为本次业务请求选择持久化的 `<data-dir>`。运行数据不得写入本Skill安装目录。
+
+如果当前请求尚未创建Run，先执行：
+
+```text
+python workflow.py create-run --inputs-file <request-json> --data-dir <data-dir>
+```
+
+保存返回的 `run_id`。同一个业务请求的后续调用必须持续使用同一个 `run_id`。
+
+## Agent执行协议
+
+重复执行以下循环：
+
+```text
+python workflow.py get-next-task --run-id <run-id> --data-dir <data-dir>
+```
+
+### `task_ready`
+
+1. 只执行返回的当前Task。
+2. 阅读返回的 `instruction` 文件。
+3. 仅使用返回的输入和Workspace路径。
+4. 完成当前Task后，将结果写入结果JSON文件。
+5. 提交结果：
+
+```text
+python workflow.py submit-task-result --run-id <run-id> --task-id <task-id> --result-type execution_result --result-file <result-json> --data-dir <data-dir>
+```
+
+6. 只有提交成功后，才能再次调用 `get-next-task`。
+
+### `waiting_user`
+
+1. 向用户展示返回的 `prompt` 或当前Human Task说明。
+2. 用户尚未回复时，结束当前执行轮次并保留 `run_id`。
+3. 收到用户回复后，按Task要求写入结果JSON。
+4. `mode=input` 使用：
+
+```text
+--result-type user_input
+```
+
+5. `mode=approval` 或遗留Task重试决定使用：
+
+```text
+--result-type user_decision
+```
+
+6. 不得替用户填写输入、批准或重试决定。
+
+### `waiting`
+
+结束当前执行轮次，保留 `run_id`，不要自行修改SQLite状态。
+
+### `completed`
+
+读取并汇总最终产物，向用户报告完成结果。
+
+### `failed`
+
+报告失败Task、错误信息和已完成产物，不执行后续Task。
+
+## Agent Task执行失败
+
+如果当前Agent Task执行失败，写入错误JSON：
+
+```json
+{
+  "type": "<error-type>",
+  "message": "<简短错误说明>"
+}
+```
+
+然后提交：
+
+```text
+python workflow.py submit-task-result --run-id <run-id> --task-id <task-id> --result-type execution_error --error-file <error-json> --data-dir <data-dir>
+```
+
+不得通过提交结果自行指定 `completed`、`failed` 或其他目标状态；状态由Flow-Skill
+根据校验结果和重试策略决定。
+
+## 产物与Workspace
+
+- 原始输入写入 `inputs/`；
+- 当前Task临时文件写入返回的 `working` 目录；
+- 验收通过的产物写入 `outputs/`；
+- 不覆盖其他Task已完成的产物；
+- 提交结果中的文件路径使用当前Run Workspace内的相对路径；
+- 重试Task时隔离或清理上一次未完成的临时文件。
+
+## 遗留Task恢复
+
+`stale_after` 只是遗留运行Task的识别阈值，不是强制执行期限。
+
+- 只有后续调用 `get-next-task` 时才检查；
+- Flow-Skill不会后台计时、主动唤醒或终止Agent；
+- 正常执行超过阈值后提交的结果仍可验收；
+- 识别到遗留Task后，必须询问用户是否重新执行整个Task；
+- 用户选择 `retry` 后才允许重新执行；
+- 用户选择 `abort` 后停止Run；
+- 不支持旧执行和新执行并存时的结果仲裁。
+
+## 相关文件
+
+- 流程定义：`workflow.py`
+- Task说明：`tasks/`
+- 确定性业务脚本：`scripts/`
+- 业务规则：`references/`
