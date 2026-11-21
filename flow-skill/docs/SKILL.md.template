@@ -113,8 +113,9 @@ Agent结束当前执行轮次前，必须再次确认最近一次 `get-next-task
 
 - `completed`：Run已完成，允许正常退出；
 - `waiting_user`：需要用户输入、审批或重试决定，允许结束当前轮次，但必须保留 `run_id`；
+- `failed`：Run已失败，报告错误后允许退出；
 - `task_ready`：禁止退出，必须执行返回的Task并调用 `submit-task-result`；
-- `waiting`：仅在明确说明当前Run等待外部条件时允许退出，并保留 `run_id`。
+- `waiting`：禁止直接退出，必须继续调用 `get-next-task` 或按业务协议处理当前运行中的Task。
 
 如果Agent已经完成Task但尚未成功调用 `submit-task-result`，禁止退出。
 提交结果后必须再次调用 `get-next-task`，不能把“结果文件已生成”当作Run结束依据。
