@@ -470,7 +470,8 @@ Agent不得在完成一个Task后直接结束。结束当前执行轮次前，�
    - `completed`：Run已完成，可以正常结束；
    - `waiting_user`：需要用户输入、审批或重试决定，可以暂停，但必须保留 `run_id`；
    - `failed`：Run已失败，报告错误后可以结束；
-4. `task_ready` 和 `waiting` 状态禁止退出；
+   - `waiting`：可以结束当前轮次，但必须报告返回的 `reason` 并保留 `run_id`；
+4. `task_ready` 状态禁止退出；
 5. 不能根据文件已生成、推理已完成或Task数量已执行完自行判断Run结束；
 6. 如果Task结果尚未得到 `submit-task-result` 的成功响应，禁止退出。
 
@@ -482,8 +483,10 @@ response = get_next_task(run_id)
 if response.status in {"task_ready", "waiting"}:
     # 必须继续执行，不能退出
     continue_flow_protocol(response)
-elif response.status in {"completed", "waiting_user", "failed"}:
-    # 可以结束当前执行轮次；waiting_user必须保留run_id
+elif response.status in {"completed", "waiting_user", "waiting", "failed"}:
+    # 可以结束当前执行轮次；waiting_user/waiting必须保留run_id并说明原因
+    if response.status == "waiting":
+        report_waiting_reason(response.reason)
     stop_current_round()
 else:
     # 未知状态不得静默退出，应报告协议错误
