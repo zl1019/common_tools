@@ -611,6 +611,7 @@ class Scheduler:
         }
         return {
             "task_id": task["task_id"],
+            "task_status": task["status"],
             "type": task["task_type"],
             "instruction": task["instruction"],
             "retry_count": task["retry_count"],
@@ -641,6 +642,7 @@ class Scheduler:
             run_id=str(run["run_id"]),
             task={
                 "task_id": task["task_id"],
+                "task_status": task["status"],
                 "type": TaskType.HUMAN,
                 "mode": definition.mode,
                 "instruction": definition.instruction,
@@ -660,6 +662,7 @@ class Scheduler:
             run_id=str(run["run_id"]),
             task={
                 "task_id": task["task_id"],
+                "task_status": task["status"],
                 "started_at": task["started_at"],
                 "stale_after_seconds": task["stale_after_seconds"],
                 "retry_count": task["retry_count"],

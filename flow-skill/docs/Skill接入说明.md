@@ -530,6 +530,7 @@ else:
   "run_id": "run_xxx",
   "task": {
     "task_id": "analyze",
+    "task_status": "running",
     "type": "agent",
     "instruction": "tasks/analyze.md",
     "retry_count": 0,
