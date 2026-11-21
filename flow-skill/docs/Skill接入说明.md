@@ -635,6 +635,68 @@ Agent领取Task
 
 均使用 `user_decision` 提交。
 
+## 12.1 断点续跑与重新执行边界
+
+Flow-Skill支持任务级断点续跑，不恢复Agent内部推理进度。
+
+例如流程为：
+
+```text
+a → b → c → d → e
+```
+
+如果运行状态为：
+
+```text
+a completed
+b completed
+c completed
+d failed
+e pending
+```
+
+恢复已有Run时：
+
+- 已完成的 `a`、`b`、`c` 不重复执行；
+- 默认只重试失败的 `d`；
+- `d`成功后继续执行 `e`；
+- 不会自动从 `b` 回退重跑 `b-c-d-e`。
+
+当前版本从 `b` 开始重跑的方式是创建新的Run，并在业务输入中指定需要的起始范围。
+V1没有提供任意Task回退接口，也不自动清除前序Task的已完成状态。
+
+如果未来增加 `restart_from_task(run_id, task_id)`，必须明确将指定Task及其后继Task
+重置为 `pending`，保留其前置Task的结果，并记录一条重启事件；不能直接修改SQLite状态
+而跳过事件记录和业务产物清理。
+
+## 12.2 数据库状态与接口状态
+
+数据库状态和 `get_next_task` 返回状态可以保持一致的语义，但不应强行共用同一枚举：
+
+| 层级 | 状态 | 含义 |
+|---|---|---|
+| Run数据库 | `running` | Run仍可继续或存在运行中的Task |
+| Run数据库 | `waiting` | Run等待用户或外部条件 |
+| Run数据库 | `completed` | Run完成门禁通过 |
+| Run数据库 | `failed` | Run失败或完成门禁失败 |
+| `get_next_task` | `task_ready` | 本次调用领取到一个Task |
+| `get_next_task` | `waiting_user` | 本次调用需要用户输入、审批或重试决定 |
+| `get_next_task` | `waiting` | 本次调用暂时不能领取Task，并返回具体原因 |
+| `get_next_task` | `completed` | Run数据库状态为`completed` |
+| `get_next_task` | `failed` | Run数据库状态为`failed` |
+
+推荐把 `get_next_task` 的返回视为数据库状态的“动作结果投影”：
+
+```text
+数据库 Run=running + 有可领取Task       → task_ready
+数据库 Run=running + Task仍在运行       → waiting(task_already_running)
+数据库 Run=waiting + 需要用户处理       → waiting_user
+数据库 Run=completed                   → completed
+数据库 Run=failed                       → failed
+```
+
+这样数据库仍保存事实状态，Agent通过接口状态决定本轮是执行、询问、暂停还是退出。
+
 ## 13. V1约束
 
 - 同一Run严格串行执行；
