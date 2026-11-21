@@ -29,10 +29,44 @@ Workspace：保存输入、中间文件和最终产物
 
 ## 2. 接入前提
 
-运行环境必须能够导入 `flow_skill`：
+运行环境必须使用 Python 3.10 或更高版本，并能够导入 `flow_skill`。
+
+### 从 GitHub 子目录安装
+
+当前包位于 `zl1019/common_tools` 的 `flow-skill` 子目录：
 
 ```powershell
-python -m pip install <flow-skill包路径或内部包地址>
+python -m pip install "flow-skill @ git+https://github.com/zl1019/common_tools.git@master#subdirectory=flow-skill"
+```
+
+生产环境应固定提交SHA或发布标签：
+
+```powershell
+python -m pip install "flow-skill @ git+https://github.com/zl1019/common_tools.git@4f59abe89ca06da720f5c6cb949886f5e0a672e4#subdirectory=flow-skill"
+```
+
+### 从本地源码安装
+
+```powershell
+python -m pip install -e "C:\path\to\common_tools\flow-skill"
+```
+
+### 验证安装
+
+```powershell
+python -c "import flow_skill; print(flow_skill.__version__)"
+flow-skill --help
+```
+
+不要把包安装目录当作运行数据目录。SQLite数据库和Workspace应放在业务Skill的
+持久化Workspace中。
+
+如果业务Skill使用 `pyproject.toml` 管理依赖，建议固定版本或提交：
+
+```toml
+dependencies = [
+    "flow-skill @ git+https://github.com/zl1019/common_tools.git@4f59abe89ca06da720f5c6cb949886f5e0a672e4#subdirectory=flow-skill"
+]
 ```
 
 业务 Skill 不应复制 Flow-Skill 的调度代码。多个业务 Skill 应依赖同一个版本化的
