@@ -31,11 +31,24 @@ RUN_MUTABLE_FIELDS = {"status", "updated_at"}
 TASK_MUTABLE_FIELDS = {
     "status",
     "retry_count",
+    "validation_retry_count",
     "inputs_json",
     "outputs_json",
     "started_at",
     "finished_at",
     "error_json",
+}
+
+_TASK_MIGRATION_COLUMNS = {
+    "instruction_raw": "TEXT",
+    "inputs_spec_json": "TEXT",
+    "outputs_spec_json": "TEXT",
+    "max_validation_retries": "INTEGER",
+    "validation_retry_count": "INTEGER NOT NULL DEFAULT 0",
+}
+_RUN_MIGRATION_COLUMNS = {
+    "skill_path": "TEXT",
+    "inputs_source": "TEXT",
 }
 
 
@@ -85,7 +98,9 @@ class Storage:
                     inputs_json TEXT NOT NULL,
                     workspace_path TEXT NOT NULL,
                     created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
+                    updated_at TEXT NOT NULL,
+                    skill_path TEXT,
+                    inputs_source TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS workflow_tasks (
@@ -106,6 +121,11 @@ class Storage:
                     started_at TEXT,
                     finished_at TEXT,
                     error_json TEXT,
+                    instruction_raw TEXT,
+                    inputs_spec_json TEXT,
+                    outputs_spec_json TEXT,
+                    max_validation_retries INTEGER,
+                    validation_retry_count INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY (run_id, task_id),
                     FOREIGN KEY (run_id) REFERENCES workflow_runs(run_id) ON DELETE CASCADE
                 );
@@ -127,8 +147,22 @@ class Storage:
                     ON workflow_events(run_id, event_id);
                 """
             )
+            self._migrate_columns(connection, "workflow_tasks", _TASK_MIGRATION_COLUMNS)
+            self._migrate_columns(connection, "workflow_runs", _RUN_MIGRATION_COLUMNS)
         finally:
             connection.close()
+
+    @staticmethod
+    def _migrate_columns(
+        connection: sqlite3.Connection,
+        table: str,
+        columns: Mapping[str, str],
+    ) -> None:
+        """Idempotent ALTER TABLE for databases created before 0.2.0."""
+        existing = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})")}
+        for column, definition in columns.items():
+            if column not in existing:
+                connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     def create_run(
         self,
@@ -140,14 +174,16 @@ class Storage:
         inputs: Mapping[str, Any],
         workspace_path: Path,
         tasks: Sequence[Mapping[str, Any]],
+        skill_path: str | None = None,
+        inputs_source: str | None = None,
     ) -> None:
         now = utc_now()
         connection.execute(
             """
             INSERT INTO workflow_runs (
                 run_id, flow_name, flow_version, status, inputs_json,
-                workspace_path, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                workspace_path, created_at, updated_at, skill_path, inputs_source
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -158,6 +194,8 @@ class Storage:
                 str(workspace_path),
                 now,
                 now,
+                skill_path,
+                inputs_source,
             ),
         )
         for order, task in enumerate(tasks):
@@ -166,8 +204,10 @@ class Storage:
                 INSERT INTO workflow_tasks (
                     run_id, task_id, task_order, task_type, instruction,
                     dependencies_json, mode, metadata_json, status,
-                    retry_count, max_retries, stale_after_seconds, inputs_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+                    retry_count, max_retries, stale_after_seconds, inputs_json,
+                    instruction_raw, inputs_spec_json, outputs_spec_json,
+                    max_validation_retries, validation_retry_count
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, 0)
                 """,
                 (
                     run_id,
@@ -182,6 +222,10 @@ class Storage:
                     task.get("max_retries", 0),
                     task.get("stale_after"),
                     encode_json(task.get("inputs", {})),
+                    task.get("instruction_raw"),
+                    task.get("inputs_spec_json"),
+                    task.get("outputs_spec_json"),
+                    task.get("max_validation_retries"),
                 ),
             )
         self.add_event(
@@ -301,6 +345,7 @@ class Storage:
 
     @staticmethod
     def _run_from_row(row: sqlite3.Row) -> dict[str, Any]:
+        keys = set(row.keys())
         return {
             "run_id": row["run_id"],
             "flow_name": row["flow_name"],
@@ -308,18 +353,22 @@ class Storage:
             "status": row["status"],
             "inputs": decode_json(row["inputs_json"], {}),
             "workspace_path": row["workspace_path"],
+            "skill_path": row["skill_path"] if "skill_path" in keys else None,
+            "inputs_source": row["inputs_source"] if "inputs_source" in keys else None,
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
 
     @staticmethod
     def _task_from_row(row: sqlite3.Row) -> dict[str, Any]:
+        keys = set(row.keys())
         return {
             "run_id": row["run_id"],
             "task_id": row["task_id"],
             "task_order": row["task_order"],
             "task_type": row["task_type"],
             "instruction": row["instruction"],
+            "instruction_raw": row["instruction_raw"] if "instruction_raw" in keys else None,
             "dependencies": decode_json(row["dependencies_json"], []),
             "mode": row["mode"],
             "metadata": decode_json(row["metadata_json"], {}),
@@ -332,4 +381,8 @@ class Storage:
             "started_at": row["started_at"],
             "finished_at": row["finished_at"],
             "error": decode_json(row["error_json"]),
+            "inputs_spec": decode_json(row["inputs_spec_json"]) if "inputs_spec_json" in keys else None,
+            "outputs_spec": decode_json(row["outputs_spec_json"]) if "outputs_spec_json" in keys else None,
+            "max_validation_retries": row["max_validation_retries"] if "max_validation_retries" in keys else None,
+            "validation_retry_count": row["validation_retry_count"] if "validation_retry_count" in keys else 0,
         }

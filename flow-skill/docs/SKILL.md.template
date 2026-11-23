@@ -20,23 +20,19 @@ description: <说明该业务Skill处理什么任务，以及何时使用。>
 
 - <业务约束1>
 - <业务约束2>
-- 不启动项目。
-- 不编写单元测试，除非用户明确提出其他要求。
 
 ## 完成任务检查门禁
 
 每个有业务产出的Agent Task必须在 `workflow.py` 配置 `validator`。
 Agent提交结果后，只有validator通过，Task才算完成并允许进入下一步。
 
-门禁至少检查：
+0.2.0 起，任务若在 `workflow.py` 中声明了 `outputs`，Flow-Skill 会先自动核验提交
+契约（键存在、JSON Schema、文件存在与扩展名、xlsx sheet 所有权、md 标题/篇幅），
+核验不过直接 rejected——validator 只需检查业务语义（数值范围、口径、跨字段一致性）。
 
-- 结果结构和必填字段；
-- 声明的文件确实存在；
-- 文件位于当前Run Workspace内；
-- 记录数量和业务汇总值正确；
-- 产物满足后续Task的输入要求。
-
-门禁失败时不得推进流程。Agent应根据返回的错误修正当前Task并重新提交，
+门禁失败时不得推进流程。Agent应根据返回的 `errors`（以及 payload 中的
+`last_validation_errors`）修正当前Task并重新提交；同一任务累计被拒达到
+`max_validation_retries` 后任务和Run会失败，因此每次被拒都必须认真修正根因。
 不得通过自行提交 `completed` 绕过检查。
 
 如果本Skill有最终报告、汇总或发布产物，还必须在 `Flow(...)` 配置Run完成门禁
@@ -44,34 +40,39 @@ Agent提交结果后，只有validator通过，Task才算完成并允许进入�
 
 ## Flow运行数据
 
-为本次业务请求选择持久化的 `<data-dir>`。运行数据不得写入本Skill安装目录。
+运行数据位置由 Flow-Skill 管理：续跑命令通常**不需要传 `--data-dir`**——包会通过
+Run 注册表（workflow.py 同目录 `.flow-registry.json`）自动定位。
 
 如果当前请求尚未创建Run，先执行：
 
 ```text
-python workflow.py create-run --inputs-file <request-json> --data-dir <data-dir>
+python workflow.py create-run --inputs-file <request-json>
 ```
 
+`--inputs-file` 传给的输入文件会被包自动复制到Run Workspace的 `inputs/`。
 保存返回的 `run_id`。同一个业务请求的后续调用必须持续使用同一个 `run_id`。
+仅当注册表不可用或数据目录确已迁移时，才需要显式 `--data-dir`（迁移加 `--rebind`）。
 
 ## Agent执行协议
 
 重复执行以下循环：
 
 ```text
-python workflow.py get-next-task --run-id <run-id> --data-dir <data-dir>
+python workflow.py get-next-task --run-id <run-id>
 ```
 
 ### `task_ready`
 
 1. 只执行返回的当前Task。
-2. 阅读返回的 `instruction` 文件。
-3. 仅使用返回的输入和Workspace路径。
+2. 阅读返回的 `instruction` 文件（绝对路径，直接使用，不要改动）。
+3. 仅使用返回的 `inputs`（按声明拍平；文件输入为绝对路径，旁边有 `<name>_meta` 说明）
+   和Workspace路径。payload 中的 `outputs_spec` 是提交契约——结果JSON必须包含其中
+   声明的每个输出，文件输出路径必须与声明一致。
 4. 完成当前Task后，将结果写入结果JSON文件。
 5. 提交结果：
 
 ```text
-python workflow.py submit-task-result --run-id <run-id> --task-id <task-id> --result-type execution_result --result-file <result-json> --data-dir <data-dir>
+python workflow.py submit-task-result --run-id <run-id> --task-id <task-id> --result-type execution_result --result-file <result-json>
 ```
 
 6. 只有提交成功后，才能再次调用 `get-next-task`。
@@ -97,7 +98,8 @@ python workflow.py submit-task-result --run-id <run-id> --task-id <task-id> --re
 
 ### `waiting`
 
-结束当前执行轮次，保留 `run_id`，不要自行修改SQLite状态。
+可以结束当前执行轮次并保留 `run_id`（必须报告返回的 `reason`），也可以继续等待，
+稍后再次调用 `get-next-task`；不要自行修改SQLite状态。
 
 ### `completed`
 
@@ -114,7 +116,7 @@ Agent结束当前执行轮次前，必须再次确认最近一次 `get-next-task
 - `completed`：Run已完成，允许正常退出；
 - `waiting_user`：需要用户输入、审批或重试决定，允许结束当前轮次，但必须保留 `run_id`；
 - `failed`：Run已失败，报告错误后允许退出；
-- `waiting`：允许结束当前轮次，但必须报告返回的 `reason` 并保留 `run_id`；
+- `waiting`：允许结束当前轮次（必须报告返回的 `reason` 并保留 `run_id`），也可以继续等待，稍后再次调用 `get-next-task`；
 - `task_ready`：禁止退出，必须执行返回的Task并调用 `submit-task-result`；
 
 如果Agent已经完成Task但尚未成功调用 `submit-task-result`，禁止退出。
@@ -139,8 +141,12 @@ Agent结束当前执行轮次前，必须再次确认最近一次 `get-next-task
 python workflow.py submit-task-result --run-id <run-id> --task-id <task-id> --result-type execution_error --error-file <error-json> --data-dir <data-dir>
 ```
 
+提交 `execution_error` 后，Task 和 Run 直接进入 `failed`（当前版本已暂时关闭失败
+自动重试，`max_retries` 暂不生效）。之后按 `failed` 状态处理：报告失败Task、错误
+信息和已完成产物，不执行后续Task。
+
 不得通过提交结果自行指定 `completed`、`failed` 或其他目标状态；状态由Flow-Skill
-根据校验结果和重试策略决定。
+根据校验结果决定。
 
 ## 产物与Workspace
 

@@ -13,7 +13,7 @@
 - 中间步骤需要 Agent 使用原生工具和推理能力；
 - 流程中包含用户输入或人工确认；
 - 需要保存 Task 状态并支持任务级恢复；
-- 需要条件分支、失败重试和运行记录。
+- 需要条件分支、遗留任务恢复和运行记录。
 
 普通知识指导、单步骤操作或一次工具调用不需要接入 Flow-Skill。
 
@@ -21,7 +21,7 @@ Flow-Skill 的职责边界：
 
 ```text
 业务 Skill：定义业务流程、任务说明、校验规则和业务脚本
-Flow-Skill：管理任务顺序、状态、分支、重试、恢复和持久化
+Flow-Skill：管理任务顺序、状态、分支、恢复和持久化
 Agent：执行当前 Task
 SQLite：保存 Run、Task 和事件状态
 Workspace：保存输入、中间文件和最终产物
@@ -76,9 +76,78 @@ dependencies = [
 
 ```toml
 dependencies = [
-    "flow-skill==0.1.0"
+    "flow-skill==0.2.0"
 ]
 ```
+
+## 2.1 数据目录与 Run 注册表（0.2.0）
+
+Run 数据位置不再依赖 Agent 记住 `--data-dir`：
+
+```text
+create-run 解析链：  --data-dir > 环境变量 FLOW_SKILL_DATA_DIR > Flow.default_data_dir > .flow-data
+续跑（get-next-task/submit/status/events）：
+  未传 --data-dir → 查注册表（workflow.py 同目录 .flow-registry.json，可用
+                    FLOW_SKILL_REGISTRY 改位置）→ 命中即用注册位置
+  传了 --data-dir 且与注册位置不一致 → 报错；数据确已迁移加 --rebind 改绑
+  未注册的存量 Run → 用 --data-dir（0.1.x 兼容），可用 --register 收编
+```
+
+- create-run 落库前做可写探针：目标目录不可写立即报错并提示用 `--data-dir`
+  指定可访问的持久目录，**绝不静默换地方**；
+- 注册表按技能独立（每技能一份文件），多技能天然隔离；写失败降级为无注册表
+  模式并在 `status` 输出的 `registry` 字段中注明；
+- 数据库记录 `skill_path` 指纹：两个同名 flow 共用同一 data_dir 时会在续跑时报
+  冲突错误——flow 名必须全局唯一。
+
+## 2.2 声明式输入输出契约（0.2.0）
+
+任务可在定义期声明输入输出（完整设计见 `输入输出契约设计.md`、`文件路径契约.md`）：
+
+```python
+from flow_skill import Flow, FileInput, FileOutput, JsonInput, JsonOutput, TextInput
+
+flow.agent(
+    id="collect",
+    instruction="tasks/collect.md",
+    validator=validate_collect,
+    inputs=[TextInput(name="region", source="run_inputs", key="region")],
+    outputs=[
+        FileOutput(name="workbook", path="outputs/run.xlsx", format="xlsx",
+                   metadata={"sheets": ["collect__明细", "collect__汇总"]}),
+        JsonOutput(name="summary", required={"total": int, "region": str}),
+    ],
+)
+
+flow.agent(
+    id="analyze",
+    instruction="tasks/analyze.md",
+    after="collect",   # 声明式输入的 from_task 必须出现在 after 中（定义期强制）
+    validator=validate_analyze,
+    inputs=[
+        FileInput(name="sales", from_task="collect", output="workbook",
+                  sheet="collect__明细"),
+        JsonInput(name="summary_in", from_task="collect", output="summary"),
+    ],
+    outputs=[JsonOutput(name="verdict", schema={...})],
+)
+```
+
+三个生效时机：
+
+| 时机 | 行为 |
+|---|---|
+| 定义期 | path 越界/`..`/绝对路径、from_task 不存在或不在 after 中、output 引用缺失、sheet 前缀不归属、metadata 与 format 不匹配、共享工作簿 format 不一致 → 加载即报错 |
+| 领取期 | inputs 按声明**拍平**注入 payload（FileInput 注入 workspace 内绝对路径 + `<name>_meta`）；`outputs_spec` 随 payload 下发；required 输入装配不出来 → 任务不发放（重试后失败，来源被 `when` 跳过则级联跳过） |
+| 提交期 | 按 outputs_spec 核验：键存在、JSON Schema（内置子集）、文件存在与扩展名、xlsx sheet 所有权/孤儿检查、md 标题与篇幅、html 片段 → 不过即 rejected |
+
+校验失败的重试闭环：rejected 响应携带完整 errors；Agent 修正后重新提交；累计被拒
+达到 `max_validation_retries`（默认 3）任务和 Run 才失败。payload 携带
+`validation_retry_count` 与 `last_validation_errors`，跨会话续跑的 Agent 也能看到
+此前失败原因。声明了 outputs 后，validator 只需写业务语义（数值范围、跨字段一致
+性等），存在性/路径/类型检查全部由声明承担。
+
+未声明 inputs/outputs 的任务行为与 0.1.x 完全一致，同一流程可混用。
 
 ## 3. 标准目录结构
 
@@ -102,7 +171,7 @@ my-business-skill/
 | 文件 | 职责 |
 |---|---|
 | `SKILL.md` | 说明何时使用该Skill，以及Agent如何执行Flow循环 |
-| `workflow.py` | 定义Task、依赖、分支、重试参数和结果校验器 |
+| `workflow.py` | 定义Task、依赖、分支和结果校验器 |
 | `tasks/*.md` | 描述单个Task的目标、输入、执行要求、输出和完成标准 |
 | `scripts/*.py` | 实现可确定执行的业务计算或数据处理 |
 | `references/` | 保存业务规则、数据口径和参考资料 |
@@ -149,7 +218,6 @@ flow.agent(
     after="input_parameters",
     validator=validate_collect,
     stale_after=1800,
-    max_retries=1,
 )
 
 flow.human(
@@ -199,7 +267,6 @@ flow.agent(
     after="collect",
     validator=validate_analyze,
     stale_after=1800,
-    max_retries=2,
 )
 ```
 
@@ -213,7 +280,7 @@ flow.agent(
 | `when` | 条件函数，返回真时执行，返回假时跳过 |
 | `validator` | 结果校验函数 |
 | `stale_after` | 遗留运行任务识别阈值，默认1800秒 |
-| `max_retries` | 普通执行错误允许自动重试的次数 |
+| `max_retries` | 暂未生效：V1已暂时关闭失败自动重试，参数保留仅为兼容 |
 | `metadata` | 传给Agent的额外结构化信息 |
 
 ### 5.2 Human Task
@@ -400,7 +467,7 @@ Agent必须根据返回的 `status` 处理：
 |---|---|
 | `task_ready` | 只执行返回的当前Task，完成后提交结果 |
 | `waiting_user` | 向用户展示问题，尚未回复时停止当前执行轮次 |
-| `waiting` | 停止当前执行轮次并保存Run ID |
+| `waiting` | 可结束当前执行轮次并保留Run ID，也可继续等待，稍后再次调用 get-next-task |
 | `completed` | 汇总最终结果并结束 |
 | `failed` | 报告失败Task和原因，不执行后续Task |
 
@@ -410,8 +477,8 @@ Agent必须根据返回的 `status` 处理：
 python workflow.py submit-task-result --run-id <run-id> --task-id <task-id> --result-type execution_result --result-file <result-json> --data-dir <data-dir>
 ```
 
-Agent不得提交 `completed`、`failed` 等目标状态。Task状态由Flow-Skill根据提交内容、
-validator和重试策略决定。
+Agent不得提交 `completed`、`failed` 等目标状态。Task状态由Flow-Skill根据提交内容和
+validator校验结果决定。
 
 ### 8.4 提交Agent Task执行错误
 
@@ -428,7 +495,8 @@ python workflow.py submit-task-result --run-id <run-id> --task-id <task-id> --re
 }
 ```
 
-如果尚未超过 `max_retries`，Task重新进入 `pending`；否则Task和Run进入 `failed`。
+当前版本已暂时关闭失败自动重试：提交 `execution_error` 后，Task 和 Run 直接进入
+`failed`，`max_retries` 参数保留但暂不生效。
 
 ### 8.5 提交用户输入
 
@@ -480,11 +548,12 @@ Agent不得在完成一个Task后直接结束。结束当前执行轮次前，�
 ```python
 response = get_next_task(run_id)
 
-if response.status in {"task_ready", "waiting"}:
-    # 必须继续执行，不能退出
+if response.status == "task_ready":
+    # 必须执行返回的Task并提交结果，不能退出
     continue_flow_protocol(response)
 elif response.status in {"completed", "waiting_user", "waiting", "failed"}:
-    # 可以结束当前执行轮次；waiting_user/waiting必须保留run_id并说明原因
+    # 可以结束当前执行轮次；waiting_user/waiting必须保留run_id并说明原因。
+    # waiting也可以选择不退出，继续等待并在稍后再次调用get-next-task。
     if response.status == "waiting":
         report_waiting_reason(response.reason)
     stop_current_round()
@@ -553,6 +622,16 @@ else:
 
 Agent应使用返回的路径，不自行推测其他Run的目录。
 
+0.2.0 起的补充：
+
+- 声明了 `inputs` 的任务，payload 的 `inputs` 为**拍平形态**（按声明 name 逐键注入，
+  FileInput 为绝对路径并附 `<name>_meta`），不再有 `run/task/dependencies` 嵌套；
+- 声明了 `outputs` 的任务，payload 会附带 `outputs_spec`（提交契约对 Agent 每次可见）；
+- 声明了 `inputs` 且任务曾被校验拒绝过，payload 携带 `validation_retry_count` 与
+  `last_validation_errors`——Agent 应优先按这些错误修正；
+- `instruction` 一律为绝对路径（基于 workflow.py 所在目录解析），与调用时的
+  工作目录无关，禁止自行拼接或替换路径。
+
 ## 10. Workspace与产物规范
 
 每个Run使用独立Workspace：
@@ -571,14 +650,18 @@ Agent应使用返回的路径，不自行推测其他Run的目录。
 
 接入要求：
 
-- 原始输入写入 `inputs/`；
+- 原始输入写入 `inputs/`；0.2.0 起 `create-run --inputs-file` 会由包自动把输入文件
+  落位到 `inputs/` 并在 Run inputs 中记录 `inputs_source`，Agent 无需手动复制；
 - Task临时文件写入自己的 `working/<task-id>/`；
 - 验收通过的业务产物写入 `outputs/`；
 - SQLite只保存状态、JSON结果和文件路径，不保存大型文件内容；
-- Task提交结果中的文件路径优先使用相对于Run Workspace的路径；
-- 后续Task通过前序Task提交的文件路径读取产物；
-- 不覆盖其他Task已经完成的产物；
-- 重试Task时必须清理或隔离此前未完成的临时文件。
+- Task提交结果中的文件路径优先使用相对于Run Workspace的路径（0.2.0 起：
+  声明了 FileOutput 的任务提交路径必须与声明一致，越界/`..`/绝对路径会被拒绝）；
+- 后续Task通过前序Task提交的文件路径读取产物（声明了契约时，装配直接给出
+  workspace 内绝对路径，无需自行拼接）；
+- 不覆盖其他Task已经完成的产物；声明了 xlsx 输出的任务只允许写
+  `<task_id>__` 前缀的 sheet，出现孤儿 sheet 提交会被拒绝；
+- 重试Task时必须清理或隔离此前未完成的临时文件（xlsx 返工须先删除自己前缀的旧 sheet）。
 
 ## 11. 条件分支
 
@@ -659,8 +742,9 @@ e pending
 恢复已有Run时：
 
 - 已完成的 `a`、`b`、`c` 不重复执行；
-- 默认只重试失败的 `d`；
-- `d`成功后继续执行 `e`；
+- 运行中被识别为遗留的Task，可在用户确认后整Task重试（见第12节）；
+- 已进入 `failed` 的Task和Run是终态：当前版本已暂时关闭失败自动重试，
+  不支持对失败Task原地重试或从失败点恢复；
 - 不会自动从 `b` 回退重跑 `b-c-d-e`。
 
 当前版本从 `b` 开始重跑的方式是创建新的Run，并在业务输入中指定需要的起始范围。
@@ -701,6 +785,7 @@ V1没有提供任意Task回退接口，也不自动清除前序Task的已完成�
 ## 13. V1约束
 
 - 同一Run严格串行执行；
+- 已暂时关闭失败自动重试：`execution_error` 直接导致Task和Run失败，`max_retries` 暂不生效；
 - 不支持多Agent并行领取Task；
 - 不保存独立Attempt；
 - 只支持Task级恢复，不恢复Agent内部推理进度；
@@ -728,4 +813,7 @@ V1没有提供任意Task回退接口，也不自动清除前序Task的已完成�
 - [ ] 写操作具备业务幂等或人工确认机制；
 - [ ] 已说明 `stale_after` 只在后续调度时检查；
 - [ ] 已说明用户拒绝后的流程行为；
-- [ ] 已说明V1不支持旧执行与重试执行并存。
+- [ ] 已说明V1不支持旧执行与重试执行并存；
+- [ ] 数据目录解析链与Run注册表机制已在SKILL.md中说明（续跑通常无需 --data-dir）；
+- [ ] 有结构化输入输出的Task已声明 inputs/outputs，from_task 均出现在 after 中；
+- [ ] 声明了FileOutput的任务已按 `<task_id>__` 前缀约定规划sheet。

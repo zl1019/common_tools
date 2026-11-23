@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flow-skill"
-version = "0.1.0"
+version = "0.2.0"
 description = "Lightweight task-level workflow control for multi-step Agent skills"
 readme = "README.md"
 requires-python = ">=3.10"
