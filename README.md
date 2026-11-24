@@ -1,4 +1,4 @@
-# OpenDay Common Tools
+# Common Tools
 
 `common_tools` 是独立 GitHub 仓库（`zl1019/common_tools`），采用 monorepo 管理多个可独立安装、独立版本化和独立发布的 Python 发行包。每个包放在自己的项目目录中，并在该目录维护 `pyproject.toml`、README 和源码。
 

@@ -1,5 +1,10 @@
 """OA meeting-room management and booking APIs."""
 
+# The `list` method below shadows the builtin `list` in the class namespace,
+# so annotations must be lazily evaluated (PEP 563) to avoid
+# "TypeError: 'function' object is not subscriptable" at import time.
+from __future__ import annotations
+
 from typing import Any
 
 
