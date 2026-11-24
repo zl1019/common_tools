@@ -480,6 +480,11 @@ python workflow.py submit-task-result --run-id <run-id> --task-id <task-id> --re
 Agent不得提交 `completed`、`failed` 等目标状态。Task状态由Flow-Skill根据提交内容和
 validator校验结果决定。
 
+提交被接受时，响应会附带 `completed_tasks`：按 `task_order` 升序列出当前已完成的任务，
+便于Agent在同一轮内确认进度（例如 `[{"order": 0, "task_id": "collect"},
+{"order": 1, "task_id": "analyze"}]`）。该字段只表示「已完成」，不含 skipped 任务；
+`rejected` 与 `run_failed` 响应不返回该字段。
+
 ### 8.4 提交Agent Task执行错误
 
 ```text

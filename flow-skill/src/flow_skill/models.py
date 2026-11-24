@@ -94,6 +94,7 @@ class SubmissionResponse:
     errors: list[str] = field(default_factory=list)
     retry_count: int | None = None
     next_available: bool = False
+    completed_tasks: list[dict[str, Any]] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {key: value for key, value in asdict_items(self).items() if value is not None}

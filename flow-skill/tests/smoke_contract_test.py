@@ -152,12 +152,21 @@ shutil.copyfile(xlsx_path, dest)
 resp = flow.submit_task_result(run_id, "collect", result_type="execution_result",
     result={"workbook": "outputs/run.xlsx", "summary": {"total": 10}})
 assert resp.status == "accepted", resp.to_dict()
-ok("契约核验通过提交")
+assert resp.completed_tasks == [{"order": 0, "task_id": "collect"}], resp.completed_tasks
+ok("契约核验通过提交 + completed_tasks 按序列出")
 
 # rejected: 路径不一致
 r = flow.get_next_task(run_id)
 assert r.status == "task_ready" and r.task["task_id"] == "analyze", r.to_dict()
 ok("审核门禁/依赖放行 analyze")
+resp_a = flow.submit_task_result(run_id, "analyze", result_type="execution_result",
+    result={"verdict": {"ok": True}})
+assert resp_a.status == "accepted", resp_a.to_dict()
+assert resp_a.completed_tasks == [
+    {"order": 0, "task_id": "collect"},
+    {"order": 1, "task_id": "analyze"},
+], resp_a.completed_tasks
+ok("completed_tasks 多任务按 task_order 排序")
 flow2 = Flow("shop-report", version="1.0", base_dir=skill)
 # simulate wrong submit on collect via second flow not needed; test rejection below
 resp_bad = None

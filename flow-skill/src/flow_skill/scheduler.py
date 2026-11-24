@@ -420,6 +420,21 @@ class Scheduler:
             "retry_count": task.get("retry_count", 0),
         }
 
+    def _completed_tasks_snapshot(
+        self,
+        connection: sqlite3.Connection,
+        run_id: str,
+    ) -> list[dict[str, Any]]:
+        """提交成功后按 task_order 列出当前已完成的任务（含本任务）。"""
+        tasks = self.storage.list_tasks(connection, run_id)
+        completed = [
+            {"order": int(task["task_order"]), "task_id": str(task["task_id"])}
+            for task in tasks
+            if task["status"] == TaskStatus.COMPLETED
+        ]
+        completed.sort(key=lambda item: item["order"])
+        return completed
+
     def _submit_running_task(
         self,
         connection: sqlite3.Connection,
@@ -460,6 +475,7 @@ class Scheduler:
                 task_id=task["task_id"],
                 retry_count=task["retry_count"],
                 next_available=True,
+                completed_tasks=self._completed_tasks_snapshot(connection, run["run_id"]),
             )
 
         if result_type is ResultType.EXECUTION_ERROR:
@@ -533,6 +549,7 @@ class Scheduler:
             run_id=run["run_id"],
             task_id=task["task_id"],
             next_available=True,
+            completed_tasks=self._completed_tasks_snapshot(connection, run["run_id"]),
         )
 
     def _submit_retry_decision(
@@ -888,7 +905,7 @@ class Scheduler:
                 connection,
                 run_id=run["run_id"],
                 task_id=task["task_id"],
-                current_status=TaskStatus.RUNNING,
+                current_status=task["status"],
                 target_status=TaskStatus.FAILED,
                 event_type="task_failed",
                 event_payload={
@@ -1084,8 +1101,21 @@ class Scheduler:
             "type": TaskType.HUMAN,
             "mode": definition.mode,
             "instruction": definition.instruction,
+            "retry_count": task.get("retry_count", 0),
+            "max_retries": task.get("max_retries", 0),
+            "validation_retry_count": task.get("validation_retry_count", 0),
+            "max_validation_retries": task.get("max_validation_retries"),
+            "workspace": {
+                "root": str(Path(str(run["workspace_path"]))),
+                "inputs": str(Path(str(run["workspace_path"])) / "inputs"),
+                "working": str(Path(str(run["workspace_path"])) / "working" / str(task["task_id"])),
+                "outputs": str(Path(str(run["workspace_path"])) / "outputs"),
+            },
             "metadata": definition.metadata,
         }
+        error_payload = task.get("error")
+        if isinstance(error_payload, Mapping) and error_payload.get("errors"):
+            human_task["last_validation_errors"] = list(error_payload["errors"])
         if definition.inputs:
             human_task["inputs"] = dict(assembled or {})
         if definition.outputs:
